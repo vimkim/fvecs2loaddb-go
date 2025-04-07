@@ -10,6 +10,8 @@ gen-256-150000:
 gen-256-300000:
     go run . -fvecs data/vector_256dim_300000row_seed0.fvecs -table tbl_256_300000 -out out/loaddb_256_300000.object
 
+gen-768-all: gen-768-75000 gen-768-150000 gen-768-300000
+
 gen-768-75000:
     go run . -fvecs data/vector_768dim_75000row_seed0.fvecs -table tbl_768_75000 -out out/loaddb_768_75000.object
 
