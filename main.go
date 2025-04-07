@@ -1,14 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"encoding/binary"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 )
 
-// readFvecs는 fvecs 파일을 열어 각 벡터를 []float32 슬라이스로 읽어들인다.
+// readFvecs reads vectors from an fvecs file.
 func readFvecs(filename string) ([][]float32, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -17,19 +19,15 @@ func readFvecs(filename string) ([][]float32, error) {
 	defer file.Close()
 
 	var vectors [][]float32
-	// 파일 끝까지 반복 읽기
 	for {
 		var dim int32
 		err := binary.Read(file, binary.LittleEndian, &dim)
 		if err != nil {
-			// 파일 끝에 도달하면 break
 			if err.Error() == "EOF" {
 				break
 			}
 			return nil, fmt.Errorf("차원 읽기 실패: %v", err)
 		}
-
-		// 차원이 음수이면 잘못된 파일
 		if dim <= 0 {
 			return nil, fmt.Errorf("잘못된 차원 값: %d", dim)
 		}
@@ -44,8 +42,17 @@ func readFvecs(filename string) ([][]float32, error) {
 	return vectors, nil
 }
 
+// formatVector converts a vector of float32 to its formatted string.
+func formatVector(vec []float32) string {
+	strValues := make([]string, len(vec))
+	for i, v := range vec {
+		strValues[i] = fmt.Sprintf("%.6f", v)
+	}
+	vectorStr := fmt.Sprintf("[%s]", strings.Join(strValues, ", "))
+	return fmt.Sprintf("'%s'\n", vectorStr)
+}
+
 func main() {
-	// 명령행 인자: fvecs 파일, 테이블 이름, 출력 파일 (선택)
 	var fvecsPath string
 	var userName string
 	var tableName string
@@ -62,7 +69,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// fvecs 파일 읽기
+	// Read vectors from file.
 	vectors, err := readFvecs(fvecsPath)
 	if err != nil {
 		fmt.Printf("fvecs 파일 읽기 오류: %v\n", err)
@@ -76,31 +83,63 @@ func main() {
 	}
 	defer outFile.Close()
 
-	// loaddb 파일 작성
-	// %class 명령어를 이용해 테이블(클래스) 및 vec 칼럼을 지정한다.
+	// Use buffered writer for efficient output.
+	writer := bufio.NewWriter(outFile)
+
+	// Write header.
 	header := fmt.Sprintf("%%class [%s].[%s] (vec)\n", userName, tableName)
-	_, err = outFile.WriteString(header)
-	if err != nil {
+	if _, err = writer.WriteString(header); err != nil {
 		fmt.Printf("헤더 작성 오류: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 각 벡터를 데이터 라인으로 작성: 인스턴스 번호 없이 벡터만 출력
-	for _, vec := range vectors {
-		strValues := make([]string, len(vec))
-		for i, v := range vec {
-			// 소수점 이하 6자리까지 문자열로 변환
-			strValues[i] = fmt.Sprintf("%.6f", v)
+	// Prepare a slice to hold formatted lines.
+	formattedLines := make([]string, len(vectors))
+
+	// Use WaitGroup to ensure all goroutines complete.
+	var wg sync.WaitGroup
+	workerCount := 8 // Adjust based on available CPU cores.
+	jobChan := make(chan struct {
+		index int
+		vec   []float32
+	}, len(vectors))
+
+	// Worker function.
+	worker := func() {
+		for job := range jobChan {
+			formattedLines[job.index] = formatVector(job.vec)
+			wg.Done()
 		}
-		// 각 벡터를 콤마와 공백으로 구분하여 대괄호([])로 감싼다.
-		vectorStr := fmt.Sprintf("[%s]", strings.Join(strValues, ", "))
-		// 데이터 라인: 벡터 문자열을 작은따옴표(')로 감싼다.
-		line := fmt.Sprintf("'%s'\n", vectorStr)
-		_, err = outFile.WriteString(line)
-		if err != nil {
+	}
+
+	// Start worker goroutines.
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+
+	// Dispatch jobs.
+	for i, vec := range vectors {
+		wg.Add(1)
+		jobChan <- struct {
+			index int
+			vec   []float32
+		}{index: i, vec: vec}
+	}
+	close(jobChan)
+	wg.Wait()
+
+	// Write formatted lines sequentially.
+	for _, line := range formattedLines {
+		if _, err = writer.WriteString(line); err != nil {
 			fmt.Printf("데이터 라인 작성 오류: %v\n", err)
 			os.Exit(1)
 		}
+	}
+
+	// Flush the writer to ensure all data is written.
+	if err = writer.Flush(); err != nil {
+		fmt.Printf("출력 버퍼 플러시 오류: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("로딩 파일이 성공적으로 생성되었습니다: %s\n", outputPath)
