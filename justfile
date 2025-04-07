@@ -1,5 +1,5 @@
 test:
-    go run . -fvecs data/vector_256dim_3row_seed0.fvecs -table tbl
+    go run . -fvecs data/vector_256dim_3row_seed0.fvecs -table tbl_test -out out/loaddb_test.object
 
 gen-256-75000:
     go run . -fvecs data/vector_256dim_75000row_seed0.fvecs -table tbl_256_75000 -out out/loaddb_256_75000.object
